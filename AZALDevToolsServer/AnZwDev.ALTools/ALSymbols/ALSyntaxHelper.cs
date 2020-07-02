@@ -41,7 +41,7 @@ namespace AnZwDev.ALTools.ALSymbols
                     name = name.Replace("\"\"", "\"");
                 }
             }
-            return "";
+            return name;
         }
 
         public static string EncodeName(string name)

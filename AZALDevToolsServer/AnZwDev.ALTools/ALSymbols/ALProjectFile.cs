@@ -18,6 +18,7 @@ namespace AnZwDev.ALTools.ALSymbols
         public string platform { get; set; }
         public string application { get; set; }
         public string test { get; set; }
+        public List<idRanges> idRanges { get; set; }
         public ALProjectFileDependency[] dependencies { get; set; }
 
         public ALProjectFile()
