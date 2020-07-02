@@ -1,5 +1,9 @@
-﻿using AnZwDev.ALTools.ALProxy;
+﻿using AnZwDev.ALTools.Extensions;
+using Microsoft.Dynamics.Nav.CodeAnalysis;
+using Microsoft.Dynamics.Nav.CodeAnalysis.Syntax;
+using Microsoft.Dynamics.Nav.CodeAnalysis.Text;
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -11,11 +15,8 @@ namespace AnZwDev.ALTools.ALSymbols.SymbolReaders
     public class ALFullSyntaxTreeReader
     {
 
-        protected ALExtensionProxy ALExtensionProxy { get; }
-
-        public ALFullSyntaxTreeReader(ALExtensionProxy alExtensionProxy)
+        public ALFullSyntaxTreeReader()
         {
-            this.ALExtensionProxy = alExtensionProxy;
         }
 
         #region Main processing methods
@@ -43,7 +44,7 @@ namespace AnZwDev.ALTools.ALSymbols.SymbolReaders
         {
             try
             {
-                dynamic sourceTree = this.ALExtensionProxy.GetSyntaxTree(source);
+                SyntaxTree sourceTree = SyntaxTree.ParseObjectText(source);
                 return ProcessSyntaxTree(sourceTree);
             }
             catch (Exception e)
@@ -52,9 +53,9 @@ namespace AnZwDev.ALTools.ALSymbols.SymbolReaders
             }
         }
 
-        public ALFullSyntaxTreeNode ProcessSyntaxTree(dynamic syntaxTree)
+        public ALFullSyntaxTreeNode ProcessSyntaxTree(SyntaxTree syntaxTree)
         {
-            dynamic node = syntaxTree.GetRoot();
+            SyntaxNode node = syntaxTree.GetRoot();
             return ProcessSyntaxTreeNode(syntaxTree, node);
         }
 
@@ -62,7 +63,7 @@ namespace AnZwDev.ALTools.ALSymbols.SymbolReaders
 
         #region Processing nodes
 
-        protected ALFullSyntaxTreeNode ProcessSyntaxTreeNode(dynamic syntaxTree, dynamic node)
+        protected ALFullSyntaxTreeNode ProcessSyntaxTreeNode(SyntaxTree syntaxTree, SyntaxNode node)
         {
             //process node
             ALFullSyntaxTreeNode alNode = CreateALNode(syntaxTree, node);
@@ -70,10 +71,10 @@ namespace AnZwDev.ALTools.ALSymbols.SymbolReaders
                 return null;
 
             //process child nodes
-            IEnumerable<dynamic> list = node.ChildNodes();
+            IEnumerable<SyntaxNode> list = node.ChildNodes();
             if (list != null)
             {
-                foreach (dynamic childNode in list)
+                foreach (SyntaxNode childNode in list)
                 {
                     ALFullSyntaxTreeNode childALNode = ProcessSyntaxTreeNode(syntaxTree, childNode);
                     if (childALNode != null)
@@ -84,13 +85,30 @@ namespace AnZwDev.ALTools.ALSymbols.SymbolReaders
             return alNode;
         }
 
-        protected ALFullSyntaxTreeNode CreateALNode(dynamic syntaxTree, dynamic node)
+        protected ALFullSyntaxTreeNode CreateALNode(SyntaxTree syntaxTree, SyntaxToken token)
+        {
+            //base syntax node properties
+            ALFullSyntaxTreeNode alNode = new ALFullSyntaxTreeNode();
+            alNode.kind = token.Kind.ToString();
+            
+            FileLinePositionSpan lineSpan = syntaxTree.GetLineSpan(token.FullSpan);
+            alNode.fullSpan = new Range(lineSpan.StartLinePosition.Line, lineSpan.StartLinePosition.Character,
+                lineSpan.EndLinePosition.Line, lineSpan.EndLinePosition.Character);
+
+            lineSpan = syntaxTree.GetLineSpan(token.Span);
+            alNode.span = new Range(lineSpan.StartLinePosition.Line, lineSpan.StartLinePosition.Character,
+                lineSpan.StartLinePosition.Line, lineSpan.StartLinePosition.Character);
+
+            return alNode;
+        }
+
+        protected ALFullSyntaxTreeNode CreateALNode(SyntaxTree syntaxTree, SyntaxNode node)
         {
             //base syntax node properties
             ALFullSyntaxTreeNode alNode = new ALFullSyntaxTreeNode();
             alNode.kind = node.Kind.ToString();
 
-            dynamic lineSpan = syntaxTree.GetLineSpan(node.FullSpan);
+            FileLinePositionSpan lineSpan = syntaxTree.GetLineSpan(node.FullSpan);
             alNode.fullSpan = new Range(lineSpan.StartLinePosition.Line, lineSpan.StartLinePosition.Character,
                 lineSpan.EndLinePosition.Line, lineSpan.EndLinePosition.Character);
 
@@ -100,46 +118,39 @@ namespace AnZwDev.ALTools.ALSymbols.SymbolReaders
 
             //additional properties
             Type nodeType = node.GetType();
+            
+            alNode.name = ALSyntaxHelper.DecodeName(nodeType.TryGetPropertyValueAsString(node, "Name"));
 
-            if ((nodeType.GetProperty("Name") != null) && (node.Name != null))
-                alNode.name = ALSyntaxHelper.DecodeName(node.Name.ToString());
+            if (node.ContainsDiagnostics)
+                alNode.containsDiagnostics = true;
 
-            if (nodeType.GetProperty("Attributes") != null)
+            IEnumerable attributes = nodeType.TryGetPropertyValue<IEnumerable>(node, "Attributes");
+            if (attributes != null)
             {
-                IEnumerable<dynamic> att = node.Attributes;
-                foreach (dynamic childNode in att)
+                foreach (SyntaxNode childNode in attributes)
                 {
                     alNode.AddAttribute(CreateALNode(syntaxTree, childNode));
                 }
             }
-            
-            if ((nodeType.GetProperty("OpenBraceToken") != null) && (node.OpenBraceToken != null))
-                alNode.openBraceToken = CreateALNode(syntaxTree, node.OpenBraceToken);
-            
-            if ((nodeType.GetProperty("CloseBraceToken") != null) && (node.CloseBraceToken != null))
-                alNode.closeBraceToken = CreateALNode(syntaxTree, node.CloseBraceToken);            
 
-            if ((nodeType.GetProperty("VarKeyword") != null) && (node.VarKeyword != null))
-                alNode.varKeyword = CreateALNode(syntaxTree, node.VarKeyword);
+            SyntaxToken specialToken = nodeType.TryGetPropertyValue<SyntaxToken>(node, "OpenBraceToken");
+            if ((specialToken != null) && (specialToken.Kind != SyntaxKind.None))
+                alNode.openBraceToken = CreateALNode(syntaxTree, specialToken);
 
-            alNode.accessModifier = this.GetStringProperty(node, nodeType, "AccessModifier");
-            alNode.identifier = this.GetStringProperty(node, nodeType, "Identifier");
-            alNode.dataType = this.GetStringProperty(node, nodeType, "DataType");
-            alNode.temporary = this.GetStringProperty(node, nodeType, "Temporary");
+            specialToken = nodeType.TryGetPropertyValue<SyntaxToken>(node, "CloseBraceToken");
+            if ((specialToken != null) && (specialToken.Kind != SyntaxKind.None))
+                alNode.closeBraceToken = CreateALNode(syntaxTree, specialToken);
+
+            specialToken = nodeType.TryGetPropertyValue<SyntaxToken>(node, "VarKeyword");
+            if ((specialToken != null) && (specialToken.Kind != SyntaxKind.None))
+                alNode.varKeyword = CreateALNode(syntaxTree, specialToken);          
+
+            alNode.accessModifier = nodeType.TryGetPropertyValueAsString(node, "AccessModifier");
+            alNode.identifier = nodeType.TryGetPropertyValueAsString(node, "Identifier");
+            alNode.dataType = nodeType.TryGetPropertyValueAsString(node, "DataType");
+            alNode.temporary = nodeType.TryGetPropertyValueAsString(node, "Temporary");
 
             return alNode;
-        }
-
-        protected string GetStringProperty(dynamic node, Type nodeType, string propertyName)
-        {
-            PropertyInfo propertyInfo = nodeType.GetProperty(propertyName);
-            if (propertyInfo != null)
-            {
-                object value = propertyInfo.GetValue(node);
-                if (value != null)
-                    return value.ToString();
-            }
-            return null;
         }
 
         #endregion
